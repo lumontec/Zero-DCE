@@ -1,62 +1,67 @@
 import torch
 import torch.nn as nn
 import torchvision
-import torch.backends.cudnn as cudnn
 import torch.optim
 import os
-import sys
-import argparse
 import time
-import dataloader
-import model
+import glob
 import numpy as np
 from torchvision import transforms
-from PIL import Image
-import glob
-import time
+from PIL import Image, ExifTags
 
+import model  # Importing your model
 
- 
+def load_and_preprocess_image(image_path):
+    # Open image with PIL and fix orientation
+    image = Image.open(image_path)
+    for orientation in ExifTags.TAGS.keys():
+        if ExifTags.TAGS[orientation] == 'Orientation':
+            try:
+                exif = dict(image._getexif().items())
+                if orientation in exif:
+                    if exif[orientation] == 3:
+                        image = image.rotate(180, expand=True)
+                    elif exif[orientation] == 6:
+                        image = image.rotate(270, expand=True)
+                    elif exif[orientation] == 8:
+                        image = image.rotate(90, expand=True)
+            except (AttributeError, KeyError, IndexError):
+                pass  # No EXIF data
+
+    # Resize to 1920x1080
+    image = image.resize((1920, 1080))
+
+    # Convert to numpy and normalize
+    image = np.asarray(image) / 255.0
+    image = torch.from_numpy(image).float().permute(2, 0, 1).unsqueeze(0)  # Shape: (1, C, H, W)
+
+    return image
+
 def lowlight(image_path):
-	os.environ['CUDA_VISIBLE_DEVICES']='0'
-	data_lowlight = Image.open(image_path)
+    data_lowlight = load_and_preprocess_image(image_path)
 
- 
+    DCE_net = model.enhance_net_nopool()
+    DCE_net.load_state_dict(torch.load('snapshots/Epoch99.pth', map_location=torch.device('cpu')))
+    DCE_net.eval()
 
-	data_lowlight = (np.asarray(data_lowlight)/255.0)
+    start = time.time()
+    _, enhanced_image, _ = DCE_net(data_lowlight)
+    end_time = time.time() - start
+    print(f"Processing time: {end_time:.4f} seconds")
 
-
-	data_lowlight = torch.from_numpy(data_lowlight).float()
-	data_lowlight = data_lowlight.permute(2,0,1)
-	data_lowlight = data_lowlight.cuda().unsqueeze(0)
-
-	DCE_net = model.enhance_net_nopool().cuda()
-	DCE_net.load_state_dict(torch.load('snapshots/Epoch99.pth'))
-	start = time.time()
-	_,enhanced_image,_ = DCE_net(data_lowlight)
-
-	end_time = (time.time() - start)
-	print(end_time)
-	image_path = image_path.replace('test_data','result')
-	result_path = image_path
-	if not os.path.exists(image_path.replace('/'+image_path.split("/")[-1],'')):
-		os.makedirs(image_path.replace('/'+image_path.split("/")[-1],''))
-
-	torchvision.utils.save_image(enhanced_image, result_path)
+    # Save the result
+    result_path = image_path.replace('test_data', 'result')
+    os.makedirs(os.path.dirname(result_path), exist_ok=True)
+    torchvision.utils.save_image(enhanced_image, result_path)
 
 if __name__ == '__main__':
-# test_images
-	with torch.no_grad():
-		filePath = 'data/test_data/'
-	
-		file_list = os.listdir(filePath)
+    with torch.no_grad():
+        filePath = 'data/test_data/'
+        file_list = os.listdir(filePath)
 
-		for file_name in file_list:
-			test_list = glob.glob(filePath+file_name+"/*") 
-			for image in test_list:
-				# image = image
-				print(image)
-				lowlight(image)
-
-		
+        for file_name in file_list:
+            test_list = glob.glob(filePath + file_name + "/*")
+            for image in test_list:
+                print(f"Processing: {image}")
+                lowlight(image)
 
